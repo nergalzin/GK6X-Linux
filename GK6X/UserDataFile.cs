@@ -336,8 +336,8 @@ namespace GK6X
                     {
                         return false;
                     }
-                    string path = Path.Combine(Program.DataBasePath, "lighting", Name + ".le");
-                    if (!File.Exists(path))
+                    string path = Program.FindLightingFile(Name);
+                    if (path == null)
                     {
                         return false;
                     }

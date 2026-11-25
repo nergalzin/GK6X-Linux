@@ -46,7 +46,9 @@ namespace GK6X
                 while (!IsClosed)
                 {
                     int tick = Environment.TickCount;
-                    if (tick < lastSentMessage || tick - 300 > lastSentMessage)
+                    // The keyboard needs real ping packets (not just any traffic): in the "driver" layer it stops
+                    // answering realtime lighting after ~5 seconds without one.
+                    if (tick < lastSentMessage || tick - 300 > lastSentMessage || tick < lastPingTick || tick - 500 > lastPingTick)
                     {
                         SendPing();
                         if (tick - 2000 > lastSentMessage)
@@ -64,8 +66,11 @@ namespace GK6X
         {
         }
 
+        private int lastPingTick;
+
         private void SendPing()
         {
+            lastPingTick = Environment.TickCount;
             WritePacketNoResponse(OpCodes.Ping, 0, null);
         }
 
@@ -220,7 +225,7 @@ namespace GK6X
         public void SetMacros(KeyboardLayer layer, UserDataFile userData)
         {
             WritePacketNoResponse(OpCodes.LayerResetDataType, (byte)layer, null, (byte)KeyboardLayerDataType.Macros);
-            // The following check has been disabled so that the WebGUI can assign macros without having to setup the keys
+            // The following check has been disabled so that macros can be assigned without having to setup the keys
             /*if (userData.GetNumMacros(layer) == 0)
             {
                 return;
@@ -319,6 +324,87 @@ namespace GK6X
             }
         }
 
+        /// <summary>
+        /// Number of 4 byte (R,G,B,A) entries in a realtime lighting frame. Indexed by key LocationCode.
+        /// </summary>
+        public const int RealtimeLedCount = 132;
+
+        /// <summary>
+        /// Sets the "driver" layer key table (op 0x16/0x01). Index = LogicCode, value = DriverValue.
+        /// Without this table (or the vendor software) the driver layer has no key assignments.
+        /// </summary>
+        public bool SetDriverKeyTable(uint[] values)
+        {
+            using (Packet packet = new Packet())
+            {
+                foreach (uint driverValue in values)
+                {
+                    packet.WriteUInt32(driverValue);
+                }
+                using (Packet result = WritePacket(OpCodes.DriverLayerSetKeyValues,
+                    (byte)OpCodes_SetDriverLayerKeyValues.KeySet, packet, 0, true))
+                {
+                    return result != null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Sets the built-in lighting config used by the "driver" layer (op 0x17/0x01, 9 byte body).
+        /// </summary>
+        public bool SetDriverLayerConfig(byte model, byte subModel, byte light, byte speed, byte dir,
+            byte r, byte g, byte b, bool enable)
+        {
+            using (Packet packet = new Packet())
+            {
+                packet.WriteByte(model);
+                packet.WriteByte(subModel);
+                packet.WriteByte(light);
+                packet.WriteByte(speed);
+                packet.WriteByte(dir);
+                packet.WriteByte(r);
+                packet.WriteByte(g);
+                packet.WriteByte(b);
+                packet.WriteByte((byte)(enable ? 1 : 0));
+                using (Packet result = WritePacket(OpCodes.DriverLayerSetConfig, 1, packet))
+                {
+                    return result != null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Sends one complete realtime lighting frame (only meaningful in the "driver" layer).
+        /// <paramref name="rgba"/> must contain <see cref="RealtimeLedCount"/> * 4 bytes (R,G,B,A per LocationCode).
+        /// </summary>
+        public bool SendRealtimeFrame(byte[] rgba)
+        {
+            if (rgba == null || rgba.Length != RealtimeLedCount * 4)
+            {
+                throw new ArgumentException("Bad realtime frame length");
+            }
+            // The official software pads the frame to a multiple of 0x38 (560 bytes)
+            byte[] padded = new byte[560];
+            Buffer.BlockCopy(rgba, 0, padded, 0, rgba.Length);
+            using (Packet packet = new Packet())
+            {
+                packet.WriteBytes(padded);
+                using (Packet result = WritePacket(OpCodes.DriverLayerUpdateRealtimeLighting,
+                    (byte)OpCodes_DriverLayerUpdateRealtimeLighting.Update, packet, 0, true))
+                {
+                    if (result == null)
+                    {
+                        return false;
+                    }
+                }
+            }
+            using (Packet result = WritePacket(OpCodes.DriverLayerUpdateRealtimeLighting,
+                (byte)OpCodes_DriverLayerUpdateRealtimeLighting.UpdateComplete, null))
+            {
+                return result != null;
+            }
+        }
+
         public void SetIdentifyDriverMacros()
         {
             using (Packet packet = new Packet())
@@ -350,15 +436,77 @@ namespace GK6X
             }
         }
 
+        /// <summary>Number of packets the keyboard did not acknowledge (used to report "apply failed").</summary>
+        public int FailedPackets;
+
         public void WritePacketNoResponse(OpCodes op1, byte op2, Packet packet, byte op3 = 0)
         {
             using (Packet response = new Packet())
             using (Packet result = WritePacket(op1, op2, packet, op3))
             {
+                if (result == null)
+                {
+                    FailedPackets++;
+                }
             }
         }
 
-        public Packet WritePacket(OpCodes op1, byte op2, Packet packet, byte op3 = 0)
+        /// <summary>
+        /// Builds one 65 byte output report (report id 0 + 64 bytes) of a possibly multi-report transfer.
+        /// Layout of the 64 bytes: [0] op1, [1] op2, [2..5] offset / length fields, [6..7] crc16, [8..63] data (max 0x38).
+        /// </summary>
+        internal static byte[] BuildReport(OpCodes op1, byte op2, byte op3, byte[] completeBuffer, int numPackets, int offset)
+        {
+            bool allowsLongOffset = false;
+            int offsetOffset = 2;
+            int lengthOffset = 4;
+            switch (op1)
+            {
+                case OpCodes.DriverLayerSetKeyValues:
+                case OpCodes.DriverLayerUpdateRealtimeLighting:
+                case OpCodes.LayerSetLightValues:
+                    offsetOffset = 2;
+                    lengthOffset = 5;
+                    allowsLongOffset = true;
+                    break;
+                case OpCodes.LayerSetKeyPressLightingEffect:
+                case OpCodes.LayerSetKeyValues:
+                case OpCodes.LayerFnSetKeyValues:
+                case OpCodes.LayerSetMacros:
+                    offsetOffset = 2;
+                    lengthOffset = 4;
+                    break;
+            }
+
+            const int reportHeaderLen = 1;
+            byte[] report = new byte[65];
+            report[1] = (byte)op1;
+            report[2] = op2;
+            if (op3 > 0)
+            {
+                // Not really an op, used for setting keyboard data buffers
+                report[3] = op3;
+            }
+            if (completeBuffer != null)
+            {
+                int numBytesToWrite = Math.Max(0, Math.Min(0x38, completeBuffer.Length - offset));
+                Buffer.BlockCopy(completeBuffer, offset, report, reportHeaderLen + 8, numBytesToWrite);
+                if (numPackets > 1)
+                {
+                    report[reportHeaderLen + offsetOffset + 0] = (byte)offset;
+                    report[reportHeaderLen + offsetOffset + 1] = (byte)(offset >> 8);
+                    if (allowsLongOffset)
+                    {
+                        report[reportHeaderLen + offsetOffset + 2] = (byte)(offset >> 16);
+                    }
+                    report[reportHeaderLen + lengthOffset] = (byte)numBytesToWrite;
+                }
+            }
+            Crc16.InsertCrc(report, reportHeaderLen, 6 + reportHeaderLen);
+            return report;
+        }
+
+        public Packet WritePacket(OpCodes op1, byte op2, Packet packet, byte op3 = 0, bool exactChunks = false)
         {
             lock (locker)
             {
@@ -368,60 +516,16 @@ namespace GK6X
                 if (packet != null)
                 {
                     completeBuffer = packet.GetWrittenBuffer();
-                    numPackets = (completeBuffer.Length / 0x38) + 1;
+                    // exactChunks: don't send a trailing empty chunk when the data is an exact multiple of 0x38
+                    // (used by realtime lighting, 560 bytes == 10 * 0x38)
+                    numPackets = exactChunks ? Math.Max(1, (completeBuffer.Length + 0x37) / 0x38) : (completeBuffer.Length / 0x38) + 1;
                 }
-
-                bool allowsLongOffset = false;
-                int offsetOffset = 2;
-                int lengthOffset = 4;
-                switch (op1)
-                {
-                    case OpCodes.DriverLayerSetKeyValues:
-                    case OpCodes.DriverLayerUpdateRealtimeLighting:
-                    case OpCodes.LayerSetLightValues:
-                        offsetOffset = 2;
-                        lengthOffset = 5;
-                        allowsLongOffset = true;
-                        break;
-                    case OpCodes.LayerSetKeyPressLightingEffect:
-                    case OpCodes.LayerSetKeyValues:
-                    case OpCodes.LayerFnSetKeyValues:
-                    case OpCodes.LayerSetMacros:
-                        offsetOffset = 2;
-                        lengthOffset = 4;
-                        break;
-                }
-
-                const int reportHeaderLen = 1;
 
                 try
                 {
                     for (int i = 0; i < numPackets; i++)
                     {
-                        byte[] report = new byte[65];
-                        report[1] = (byte)op1;
-                        report[2] = op2;
-                        if (op3 > 0)
-                        {
-                            // Not really an op, used for setting keyboard data buffers
-                            report[3] = op3;
-                        }
-                        if (completeBuffer != null)
-                        {
-                            int numBytesToWrite = Math.Min(0x38, completeBuffer.Length - offset);
-                            Buffer.BlockCopy(completeBuffer, offset, report, reportHeaderLen + 8, numBytesToWrite);
-                            if (numPackets > 1)
-                            {
-                                report[reportHeaderLen + offsetOffset + 0] = (byte)offset;
-                                report[reportHeaderLen + offsetOffset + 1] = (byte)(offset >> 8);
-                                if (allowsLongOffset)
-                                {
-                                    report[reportHeaderLen + offsetOffset + 3] = (byte)(offset >> 16);
-                                }
-                                report[reportHeaderLen + lengthOffset] = (byte)numBytesToWrite;
-                            }
-                        }
-                        Crc16.InsertCrc(report, reportHeaderLen, 6 + reportHeaderLen);
+                        byte[] report = BuildReport(op1, op2, op3, completeBuffer, numPackets, offset);
                         stream.Write(report);
 
                         byte[] resultBuffer = GetResponse((byte)op1, op2);

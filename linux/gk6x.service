@@ -1,0 +1,14 @@
+[Unit]
+Description=GK6X keyboard realtime lighting
+Documentation=https://github.com/nergalzin/GK6X-Linux
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/gk6x daemon
+Restart=on-failure
+RestartSec=3
+# Lets the service put the keyboard back on its own layer when stopped
+TimeoutStopSec=5
+
+[Install]
+WantedBy=default.target

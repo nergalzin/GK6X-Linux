@@ -1,0 +1,6 @@
+# GK6X / SEMITEK keyboards (GK61, GK64, GK68, GK84, GK87, SK61, ... USB id 1ea7:0907)
+#
+# Gives the logged-in desktop user access to the keyboard's raw HID interfaces (needed to
+# program keys and to control the lighting) without sudo. "uaccess" is handled by systemd-logind:
+# only the user sitting at the machine gets the access, nobody else (no world-writable device).
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1ea7", ATTRS{idProduct}=="0907", TAG+="uaccess"

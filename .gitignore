@@ -10,6 +10,9 @@
 /Build/*.pdb
 /Build/*.dll
 /Build/*.xml
+/Build/GK6X
+/Build/GK6X.deps.json
+/Build/GK6X.runtimeconfig.json
 /Build/KbLog.txt
 
 # User-specific files

@@ -2,8 +2,6 @@
 
 Added commandline options for specifying custom prefix and filename and also to autorun
 
-/gui             --> runs GUI mode
-
 /p [prefix]      --> specifies the prefix. UserData filename will be "[prefix] - modelid.txt"
 
 /f [filename]    --> specifies the prefix. UserData filename will be "[filename].txt"

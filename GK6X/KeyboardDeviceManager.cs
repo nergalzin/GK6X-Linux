@@ -110,6 +110,8 @@ namespace GK6X
                         HidStream stream;
                         if (device.TryOpen(out stream))
                         {
+                            // Never block forever if the keyboard stops answering (the ping thread would hang with it)
+                            try { stream.ReadTimeout = 2000; stream.WriteTimeout = 2000; } catch { }
                             if (!stream.CanWrite)
                             {
                                 stream.Close();

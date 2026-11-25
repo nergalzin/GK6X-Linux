@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -19,15 +19,16 @@ namespace GK6X
 
         static void Main(string[] args)
         {
-            bool isRunAsGUI = false;
+            if (Cli.IsCommand(args))
+            {
+                Environment.Exit(Cli.Run(args));
+                return;
+            }
             if (args.Length > 0) {
                 string flag = args[0].ToLower();
                 
                 switch(flag)
                 {
-                    case "/gui":
-                        isRunAsGUI = true;
-                        break;
                     case "/p":  //filename prefix
                         if (args.Length>1)
                         {
@@ -53,56 +54,128 @@ namespace GK6X
                             Console.WriteLine("Filename: " + UserFileName);
                         }
                         break;
-                    default:
-                        isRunAsGUI = false;
-                        break;
                 }
 
             }
-#if AS_GUI
-            Run(asGUI: true);
-#else
-
-            // Run(asGUI: false);
-            Run(asGUI: isRunAsGUI);
-
-#endif
+            Run();
             Stop();
-        }
-
-        public static int DllMain(string arg)
-        {
-            Run(asGUI: true);
-            Stop();
-            return 0;
         }
 
         static void Stop()
         {
             KeyboardDeviceManager.StopListener();
-            WebGUI.Stop();
             Environment.Exit(0);// Ensure any loose threads die...
         }
 
-        static void Run(bool asGUI)
+        private static bool initialized;
+
+        /// <summary>
+        /// Resolves the data / user data / log folders and loads the static data files.
+        /// Layout on Linux (when installed): data next to the program, user files under ~/.config/gk6x,
+        /// logs under ~/.local/state/gk6x. Put a file called "portable.txt" next to the program to keep
+        /// everything in the program folder instead.
+        /// </summary>
+        internal static bool Initialize()
         {
+            if (initialized)
+            {
+                return true;
+            }
             BasePath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-            DataBasePath = Path.Combine(BasePath, DataBasePath);
-            UserDataPath = Path.Combine(BasePath, UserDataPath);
+            string dataOverride = Environment.GetEnvironmentVariable("GK6X_DATA");
+            DataBasePath = !string.IsNullOrEmpty(dataOverride) ? dataOverride : Path.Combine(BasePath, DataBasePath);
+            bool portable = File.Exists(Path.Combine(BasePath, "portable.txt")) ||
+                !(Environment.OSVersion.Platform == PlatformID.Unix);
+            if (portable)
+            {
+                UserDataPath = Path.Combine(BasePath, UserDataPath);
+                LogDirectory = BasePath;
+            }
+            else
+            {
+                string home = Environment.GetEnvironmentVariable("HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                string config = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+                if (string.IsNullOrEmpty(config)) config = Path.Combine(home, ".config");
+                string state = Environment.GetEnvironmentVariable("XDG_STATE_HOME");
+                if (string.IsNullOrEmpty(state)) state = Path.Combine(home, ".local", "state");
+                ConfigPath = Path.Combine(config, "gk6x");
+                UserDataPath = Path.Combine(ConfigPath, "UserData");
+                LogDirectory = Path.Combine(state, "gk6x");
+                try
+                {
+                    Directory.CreateDirectory(UserDataPath);
+                    Directory.CreateDirectory(LogDirectory);
+                    // First run: provide the sample configs next to the user's own files
+                    string sampleDir = Path.Combine(BasePath, "UserData");
+                    if (Directory.Exists(sampleDir))
+                    {
+                        foreach (string file in Directory.GetFiles(sampleDir))
+                        {
+                            string target = Path.Combine(UserDataPath, Path.GetFileName(file));
+                            if (!File.Exists(target) && Path.GetFileName(file).Contains("Sample"))
+                            {
+                                File.Copy(file, target);
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                }
+            }
+            if (ConfigPath == null)
+            {
+                ConfigPath = BasePath;
+            }
 
             if (!Localization.Load())
             {
                 LogFatalError("Failed to load localization data");
-                return;
+                return false;
             }
             if (!KeyValues.Load())
             {
                 LogFatalError("Failed to load the key data");
-                return;
+                return false;
             }
             if (!KeyboardState.Load())
             {
                 LogFatalError("Failed to load keyboard data");
+                return false;
+            }
+            initialized = true;
+            return true;
+        }
+
+        public static string ConfigPath;
+        public static string LogDirectory;
+
+        /// <summary>Lighting effects (.le) created by the user live in UserData/lighting.</summary>
+        public static string UserLightingPath
+        {
+            get { return Path.Combine(UserDataPath, "lighting"); }
+        }
+
+        /// <summary>Finds a lighting effect file by name (user files win over the bundled ones).</summary>
+        public static string FindLightingFile(string name)
+        {
+            if (string.IsNullOrEmpty(name) || name.IndexOfAny(new[] { '/', '\\' }) >= 0 || name.Contains(".."))
+            {
+                return null;
+            }
+            string user = Path.Combine(UserLightingPath, name + ".le");
+            if (File.Exists(user))
+            {
+                return user;
+            }
+            string bundled = Path.Combine(DataBasePath, "lighting", name + ".le");
+            return File.Exists(bundled) ? bundled : null;
+        }
+
+        static void Run()
+        {
+            if (!Initialize())
+            {
                 return;
             }
 
@@ -118,7 +191,6 @@ namespace GK6X
             {
                 Log("Connected to device '" + device.State.ModelName + "' model:" + device.State.ModelId +
                     " fw:" + device.State.FirmwareVersion);
-                WebGUI.UpdateDeviceList();
 
                 string file = GetUserDataFile(device);
 
@@ -144,47 +216,9 @@ namespace GK6X
             KeyboardDeviceManager.Disconnected += (KeyboardDevice device) =>
             {
                 Log("Disconnected from device '" + device.State.ModelName + "'");
-                WebGUI.UpdateDeviceList();
             };
             KeyboardDeviceManager.StartListener();
             
-            if (asGUI)
-            {
-                Process currentProc = Process.GetCurrentProcess();
-                Process[] procs = Process.GetProcessesByName(currentProc.ProcessName);
-                try
-                {
-                    foreach (Process proc in procs)
-                    {
-                        try
-                        {
-                            if (proc != currentProc && proc.Id != currentProc.Id)
-                            {
-                                proc.Kill();
-                            }
-                        }
-                        catch
-                        {
-                        }
-                    }
-                }
-                finally
-                {
-                    foreach (Process proc in procs)
-                    {
-                        proc.Close();
-                    }
-                }
-                currentProc.Close();
-
-                WebGUI.Run();
-                while (WebGUI.LastPing > DateTime.Now - WebGUI.PingTimeout)
-                {
-                    Thread.Sleep(1000);
-                }
-                return;
-            }
-
             bool running = true;
             bool hasNullInput = false;
 
@@ -252,230 +286,6 @@ namespace GK6X
                         else
                         {
                             Log("Bad input. Expected folder name.");
-                        }
-                        break;
-                    case "gui":
-                        WebGUI.Run();
-                        break;
-                    case "gui_to_txt":
-                        {
-                            if (string.IsNullOrEmpty(WebGUI.UserDataPath))
-                            {
-                                Log("Load GUI first");
-                            }
-                            else
-                            {
-                                string userDataPath = WebGUI.UserDataPath;
-                                int accountId = 0;
-                                string accountDir = Path.Combine(userDataPath, "Account", accountId.ToString());
-                                if (Directory.Exists(accountDir))
-                                {
-                                    foreach (KeyboardDevice device in KeyboardDeviceManager.GetConnectedDevices())
-                                    {
-                                        string deviceDir = Path.Combine(userDataPath, "Account", accountId.ToString(), "Devices", device.State.ModelId.ToString());
-                                        if (Directory.Exists(deviceDir))
-                                        {
-                                            Dictionary<int, UserDataFile.Macro> macrosById = new Dictionary<int, UserDataFile.Macro>();
-                                            UserDataFile userDataFile = new UserDataFile();
-                                            foreach (string file in Directory.GetFiles(deviceDir, "*.cmf"))
-                                            {
-                                                string config = Encoding.UTF8.GetString(CMFile.Load(file));
-                                                Dictionary<string, object> data = MiniJSON.Json.Deserialize(config) as Dictionary<string, object>;
-                                                int modelIndex = (int)Convert.ChangeType(data["ModeIndex"], typeof(int));
-                                                KeyboardLayer layer = (KeyboardLayer)modelIndex;
-
-                                                //////////////////////////////////////////
-                                                // Keys / macros (NOTE: Macros on different layers might wipe each other. look into.)
-                                                //////////////////////////////////////////
-                                                for (int i = 0; i < 2; i++)
-                                                {
-                                                    string setStr = i == 0 ? "KeySet" : "FnKeySet";
-                                                    if (data.ContainsKey(setStr))
-                                                    {
-                                                        List<object> keys = data[setStr] as List<object>;
-                                                        foreach (object keyObj in keys)
-                                                        {
-                                                            Dictionary<string, object> key = keyObj as Dictionary<string, object>;
-                                                            int keyIndex = (int)Convert.ChangeType(key["Index"], typeof(int));
-                                                            uint driverValue = KeyValues.UnusedKeyValue;
-                                                            string driverValueStr = (string)key["DriverValue"];
-                                                            if (driverValueStr.StartsWith("0x"))
-                                                            {
-                                                                if (uint.TryParse(driverValueStr.Substring(2), System.Globalization.NumberStyles.HexNumber, null, out driverValue))
-                                                                {
-                                                                    if (KeyValues.GetKeyType(driverValue) == DriverValueType.Macro && key.ContainsKey("Task"))
-                                                                    {
-                                                                        Dictionary<string, object> task = key["Task"] as Dictionary<string, object>;
-                                                                        if (task != null && (string)task["Type"] == "Macro")
-                                                                        {
-                                                                            Dictionary<string, object> taskData = task["Data"] as Dictionary<string, object>;
-                                                                            string macroGuid = (string)taskData["GUID"];
-                                                                            string macroFile = Path.Combine(userDataPath, "Account", accountId.ToString(), "Macro", macroGuid + ".cms");
-                                                                            if (File.Exists(macroFile))
-                                                                            {
-                                                                                UserDataFile.Macro macro = new UserDataFile.Macro(null);
-                                                                                macro.LoadFile(macroFile);
-                                                                                macro.RepeatCount = (byte)Convert.ChangeType(taskData["Repeats"], typeof(byte));
-                                                                                macro.RepeatType = (MacroRepeatType)(byte)Convert.ChangeType(taskData["StopMode"], typeof(byte));
-                                                                                macro.Id = KeyValues.GetKeyData2(driverValue);
-                                                                                macrosById[macro.Id] = macro;
-                                                                                userDataFile.Macros[macroGuid] = macro;
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                                else
-                                                                {
-                                                                    driverValue = KeyValues.UnusedKeyValue;
-                                                                }
-                                                            }
-                                                            if (keyIndex >= 0 && keyIndex < device.State.MaxLogicCode && driverValue != KeyValues.UnusedKeyValue)
-                                                            {
-                                                                KeyboardState.Key keyInfo = device.State.GetKeyByLogicCode(keyIndex);
-                                                                if (keyInfo != null)
-                                                                {
-                                                                    Dictionary<string, uint> vals = userDataFile.FindOrAddLayer(layer, i > 0).Keys;
-                                                                    if (Enum.IsDefined(typeof(DriverValue), driverValue))
-                                                                    {
-                                                                        vals[keyInfo.DriverValueName.ToLower()] = driverValue;
-                                                                    }
-                                                                    else
-                                                                    {
-                                                                        Log("Failed to map index " + keyIndex + " to " + driverValue + " on layer " + layer +
-                                                                            (i > 0 ? " fn" : string.Empty));
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                //////////////////////////////////////////
-                                                // Lighting
-                                                //////////////////////////////////////////
-                                                Dictionary<string, UserDataFile.LightingEffect> effects = new Dictionary<string, UserDataFile.LightingEffect>();
-                                                string[] leHeaders = { "ModeLE", "DriverLE" };
-                                                foreach (string leHeader in leHeaders)
-                                                {
-                                                    if (data.ContainsKey(leHeader))
-                                                    {
-                                                        List<object> leEntries = data[leHeader] as List<object>;
-                                                        if (leEntries == null)
-                                                        {
-                                                            // There's only one ModeLE
-                                                            leEntries = new List<object>();
-                                                            leEntries.Add(data[leHeader]);
-                                                        }
-                                                        foreach (object entry in leEntries)
-                                                        {
-                                                            Dictionary<string, object> modeLE = entry as Dictionary<string, object>;
-                                                            string leGuid = (string)modeLE["GUID"];
-                                                            if (!string.IsNullOrEmpty(leGuid))
-                                                            {
-                                                                string filePath = Path.Combine(userDataPath, "Account", accountId.ToString(), "LE", leGuid + ".le");
-                                                                if (!effects.ContainsKey(leGuid) && File.Exists(filePath))
-                                                                {
-                                                                    UserDataFile.LightingEffect le = new UserDataFile.LightingEffect(userDataFile, null);
-                                                                    le.Load(device.State, Encoding.UTF8.GetString(CMFile.Load(filePath)));
-                                                                    le.Layers.Add(layer);
-                                                                    userDataFile.LightingEffects[leGuid] = le;
-                                                                    effects[leGuid] = le;
-                                                                }
-                                                            }
-                                                            else
-                                                            {
-                                                                object leDataObj;
-                                                                if (modeLE.TryGetValue("LEData", out leDataObj))
-                                                                {
-                                                                    Dictionary<string, object> leData = leDataObj as Dictionary<string, object>;
-                                                                    if (leData != null)
-                                                                    {
-                                                                        // This should be static lighting data only
-                                                                        UserDataFile.LightingEffect le = new UserDataFile.LightingEffect(userDataFile, null);
-                                                                        le.LoadStatic(device.State, leData);
-                                                                        le.Layers.Add(layer);
-                                                                        userDataFile.LightingEffects[Guid.NewGuid().ToString()] = le;
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            userDataFile.SaveFromGUI(device.State, Path.Combine(UserDataPath, device.State.ModelId + "_exported.txt"));
-                                            Log("Done");
-                                            break;
-                                        }
-                                    }
-                                }
-                                else
-                                {
-                                    Log("Account settings not found for account id " + accountId);
-                                }
-                            }
-                        }
-                        break;
-                    case "gui_le":
-                        {
-                            string userDataPath = WebGUI.UserDataPath;
-                            string leName = line.Trim();
-                            int spaceIndex = leName.IndexOf(' ');
-                            if (spaceIndex > 0)
-                            {
-                                leName = leName.Substring(spaceIndex).Trim();
-                            }
-                            else
-                            {
-                                leName = null;
-                            }
-                            if (!string.IsNullOrEmpty(leName))
-                            {
-                                if (!string.IsNullOrEmpty(userDataPath) && Directory.Exists(userDataPath))
-                                {
-                                    string leDir = Path.Combine(userDataPath, "Account", "0", "LE");
-                                    string leListFile = Path.Combine(leDir, "lelist.json");
-                                    if (File.Exists(leListFile))
-                                    {
-                                        bool foundFile = false;
-                                        List<object> leList = MiniJSON.Json.Deserialize(File.ReadAllText(leListFile)) as List<object>;
-                                        if (leList != null)
-                                        {
-                                            foreach (object item in leList)
-                                            {
-                                                Dictionary<string, object> guidName = item as Dictionary<string, object>;
-                                                if (guidName["Name"].ToString() == leName)
-                                                {
-                                                    string leFileName = Path.Combine(leDir, guidName["GUID"].ToString() + ".le");
-                                                    if (File.Exists(leFileName))
-                                                    {
-                                                        foreach (char c in System.IO.Path.GetInvalidFileNameChars())
-                                                        {
-                                                            leName = leName.Replace(c, '_');
-                                                        }
-                                                        string effectString = Encoding.UTF8.GetString(CMFile.Load(leFileName));
-                                                        effectString = CMFile.FormatJson(effectString);
-                                                        File.WriteAllText(Path.Combine(DataBasePath, "lighting", leName + ".le"), effectString);
-                                                        Program.Log("Copied '" + leName + "'");
-                                                        foundFile = true;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if (!foundFile)
-                                        {
-                                            Program.Log("Failed to find lighting effect '" + leName + "' (it's case sensitive)");
-                                        }
-                                    }
-                                    else
-                                    {
-                                        Program.Log("Failed to find file '" + leListFile + "'");
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                Program.Log("Invalid input. Expected lighting effect name.");
-                            }
                         }
                         break;
                     case "findkeys":
@@ -728,7 +538,14 @@ namespace GK6X
         {
             lock (logLocker)
             {
-                File.AppendAllText(Path.Combine(BasePath, "KbLog.txt"), "[" + DateTime.Now.TimeOfDay + "] " + str + Environment.NewLine);
+                try
+                {
+                    File.AppendAllText(Path.Combine(LogDirectory ?? BasePath ?? ".", "KbLog.txt"), "[" + DateTime.Now.TimeOfDay + "] " + str + Environment.NewLine);
+                }
+                catch
+                {
+                    // Never fail because the log can't be written (read only install folder, etc)
+                }
                 Console.WriteLine(str);
             }
         }
@@ -802,7 +619,7 @@ namespace GK6X
                 }
             }
 
-            // Create a merged 'driver' directory containing all the data from all distributors (for the WebGUI)
+            // Create a merged 'driver' directory containing all the data from all distributors
             string combinedDriverDir = Path.Combine(srcDir, "driver_combined");
 
             srcDir = GetDriverDir(srcDir);

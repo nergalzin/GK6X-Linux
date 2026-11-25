@@ -1,5 +1,6 @@
-﻿using MiniJSON;
+using MiniJSON;
 using System;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -24,7 +25,8 @@ namespace GK6X
                 Dictionary<string, string> localeValues = new Dictionary<string, string>();
                 Values[locale] = localeValues;
 
-                Dictionary<string, object> groups = Json.Deserialize(File.ReadAllText(file)) as Dictionary<string, object>;
+                string text = File.ReadAllText(file);
+                Dictionary<string, object> groups = Json.Deserialize(text) as Dictionary<string, object>;
                 if (groups != null)
                 {
                     foreach (KeyValuePair<string, object> group in groups)
@@ -42,6 +44,18 @@ namespace GK6X
                                 localeValues[value.Key] = value.Value.ToString();
                             }
                         }
+                    }
+                }
+
+                // The shipped language files are JavaScript fragments, not strict json (e.g. "macro": (e = {...})), so the
+                // json parser may give up half way. Fill in whatever it missed from the plain "key": "value" lines.
+                Regex line = new Regex("^\\s*\"([^\"]+)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*,?\\s*$");
+                foreach (string raw in text.Split('\n'))
+                {
+                    Match m = line.Match(raw.TrimEnd('\r'));
+                    if (m.Success && !localeValues.ContainsKey(m.Groups[1].Value))
+                    {
+                        localeValues[m.Groups[1].Value] = Regex.Unescape(m.Groups[2].Value);
                     }
                 }
             }
