@@ -1,96 +1,222 @@
-# GK6X for Linux (native)
+# GK6X Linux
 
-This fork runs natively on Linux (.NET 8, no mono, no `sudo`) and adds **realtime RGB lighting**: change colors and effects
-instantly from the command line or from a web page with a live keyboard preview. Tested on a SK61S RGB; key mapping,
-macros and the original commands still work.
+Native Linux app for **GK6X keyboards** (GK61, GK64, GK84, SK61 and other models from the official software) with
+**realtime RGB lighting**, key remapping, macros and lighting effects, controlled from the command line or from a local
+control page with a live keyboard preview.
 
-Fork of [pixeltris/GK6X](https://github.com/pixeltris/GK6X) (MIT license, archived upstream).
+- Runs natively on Linux with .NET 8 or newer: no mono, no Windows software, no `sudo` while running.
+- Lighting changes are instant. The control page shows exactly what the keyboard is receiving.
+- Key mapping, macros and the original GK6X commands still work.
+- Tested on a **SK61S RGB**. Other GK6X models should work. If yours doesn't, open an issue.
+
+Maintained by [Nergalzin](https://github.com/nergalzin). Based on [pixeltris/GK6X](https://github.com/pixeltris/GK6X)
+(MIT, archived upstream); see [Credits and license](#credits-and-license).
 
 ![GK6X lighting control page](docs/screenshot.png)
 
 *Control page (`gk6x ui`) on a SK61S RGB: the keys show the colors the keyboard is receiving in real time; click or drag to paint keys.*
 
-The page has a theme picker (top right): Midnight, Neon, Carbon, Aurora, Clean light, Material You and Classic. Your choice is remembered by the browser (or open `http://127.0.0.1:6465/?theme=aurora`).
+## Contents
 
-## Control page
-
-`gk6x ui` opens the control page (also in the app menu). Four tabs, modelled on the official software's screens:
-
-**Lighting** - realtime effects, per-key painting, colors, speed, brightness (this is the live preview of what the keyboard receives).
-
-**Configurations** - remap keys per layer (Layer 1-3, each with its Fn layer). Pick a key, then choose a function from the
-palette (Primary, Number Pad, Media, System/Net, Mouse, Disable, Layers, Lighting, Macros) or build a combination such as
-Ctrl+Shift+A (Win/Mac naming toggle). **Save** writes `~/.config/gk6x/UserData/MODELID.txt`, **Apply** writes the layer to the
-keyboard. **Import / Export** exchange that file. The standard layer is protected (the official software doesn't allow
-remapping it either); only its lighting can be set.
-
-![Configurations tab](docs/config.png)
-
-**LE Files** - the 300+ lighting effects shipped with the official software, searchable. **View** plays one on your keyboard
-in realtime (software approximation of the firmware animation), **Add to layer** + **Apply** stores it in the keyboard
-(up to 32 on the standard layer, one on the other layers). Paint keys on the preview and **Save** them as your own static LE file.
-
-![LE Files tab](docs/le.png)
-
-**Macros** - create macros with categories and search. **Record** captures the keys you press in the page (with timing), or add
-actions by hand (Press / Down / Up + delay). Repeat modes: N times, until the key is released, or until it is pressed again.
-Assign a macro to a key in Configurations -> Macros, then Apply.
-
-![Macros tab](docs/macros.png)
-
-The page speaks English and Portuguese (selector in the header) and has seven themes.
-
-Extra key functions available in the palette (all firmware features): next lighting effect / reactive effect, brightness and
-speed up/down, lighting pause, lighting on/off, lock the Windows key, hold-to-switch layer, layer buttons. Firmware shortcuts
-you can use without any software (from the Epomaker / Skyloong SK61-GK61 manuals): Fn+Backspace backlight on/off, Fn+P / Fn+[
-brightness -/+, Fn+] next mode, Fn+Q/W/E/R driver layer / layer 1 / 2 / 3.
-
-Files: profile `~/.config/gk6x/UserData/MODELID.txt` (original GK6X text format, a `.bak` copy is kept on save), your own
-lighting files `~/.config/gk6x/UserData/lighting/*.le`, realtime settings `~/.config/gk6x/realtime.json`.
+- [Install](#install)
+- [Use](#use)
+- [Control page](#control-page)
+- [Update](#update)
+- [Uninstall](#uninstall)
+- [Troubleshooting](#troubleshooting)
+- [Credits and license](#credits-and-license)
 
 ## Install
 
-1. Install the .NET SDK and git (Arch/CachyOS: `sudo pacman -S dotnet-sdk git`, Fedora: `sudo dnf install dotnet-sdk-8.0 git`, Ubuntu: `sudo apt install dotnet-sdk-8.0 git`).
-2. Get the code and run the installer as your normal user (it asks for your password once, only for the udev rule):
+1. **Install the .NET SDK (8 or newer) and git:**
+
+   | Distro | Command |
+   |---|---|
+   | Arch / CachyOS | `sudo pacman -S dotnet-sdk git` |
+   | Fedora | `sudo dnf install dotnet-sdk-8.0 git` |
+   | Ubuntu / Debian | `sudo apt install dotnet-sdk-8.0 git` |
+
+2. **Download the code:**
    ```sh
-   git clone https://github.com/nergalzin/GK6X-Linux.git && cd GK6X-Linux
-   ./linux/install.sh --autostart      # --autostart = start the lighting service at every login
+   git clone https://github.com/nergalzin/GK6X-Linux.git
+   cd GK6X-Linux
    ```
-3. Make sure `~/.local/bin` is in your `PATH` (fish: `fish_add_path ~/.local/bin`) and replug the keyboard if it isn't detected.
-4. Check it: `gk6x list` (every line should say `open=yes`), then `gk6x status`.
+
+3. **Run the installer as your normal user** (not with `sudo`):
+   ```sh
+   ./linux/install.sh --autostart
+   ```
+   - `--autostart` starts the lighting service at every login. Leave it out if you only want to start it by hand.
+   - The installer asks for your password **once**, and only to add the udev rule. That rule lets your user talk to this
+     keyboard without root, and it only touches this keyboard's `hidraw` devices.
+   - The installer also adds a **"GK6X Lighting"** shortcut to your app menu.
+
+4. **Put `~/.local/bin` in your `PATH`** if the installer warned about it:
+   - fish: `fish_add_path ~/.local/bin`
+   - bash: add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc`
+
+5. **Replug the keyboard once**, then check it:
+   ```sh
+   gk6x list      # every line should say open=yes
+   systemctl --user start gk6x
+   gk6x status
+   ```
+
+Where everything goes:
+
+| Path | What |
+|---|---|
+| `~/.local/share/gk6x/app` | the program |
+| `~/.local/bin/gk6x` | the `gk6x` command |
+| `~/.config/gk6x/` | your settings, key mappings, lighting files and macros (never touched by updates) |
+| `~/.config/systemd/user/gk6x.service` | lighting service |
+| `~/.local/share/applications/gk6x.desktop` | app menu shortcut |
+| `/etc/udev/rules.d/70-gk6x.rules` | keyboard access rule (the only file that needs `sudo`) |
 
 ## Use
 
+The lighting service (`gk6x daemon`, or `systemctl --user start gk6x`) must be running for the commands below.
+
 ```sh
 gk6x color ff0000                  # solid color
-gk6x effect rainbow --speed 60     # static, rainbow, cycle, breathing, wave, gradient, reactive, ripple, custom, off
-gk6x key W 00ff00                  # paint one key ('off' removes it); gk6x clear removes all
-gk6x brightness 70
-gk6x ui                            # control page in its own window (also in the app menu); --tab = browser tab
-gk6x stop                          # keyboard goes back to its normal layer
+gk6x effect rainbow --speed 60     # see all effects with: gk6x effects
+gk6x brightness 70                 # 0 - 100
+gk6x speed 40                      # 1 - 100
+gk6x key W 00ff00                  # paint one key ('off' removes it)
+gk6x clear                         # remove all painted keys
+gk6x off                           # all lights off
+gk6x status
+gk6x ui                            # control page in its own window (--tab = browser tab)
+gk6x stop                          # stop the service; the keyboard goes back to its own layer
 ```
-Key mapping and macros: run `gk6x` with no arguments (`map`, `unmap`, `findkeys`...); your files live in `~/.config/gk6x/UserData/`.
+
+Effects: `static`, `rainbow`, `cycle`, `breathing`, `wave`, `gradient`, `reactive`, `ripple`, `le` (an LE lighting file), `custom`, `off`
+(options: `--color`, `--color2`, `--speed`, `--dir 0-3`).
+
+Diagnostics: `gk6x list` shows the keyboard interfaces and whether they can be opened, and `gk6x probe` lights every key
+for a few seconds to test the connection.
+
+Key mapping and macros from the terminal: run `gk6x` with no arguments for the original interactive prompt (`map`,
+`unmap`, `dumpkeys`, `findkeys`...). Your files live in `~/.config/gk6x/UserData/`. Command-line switches such as `/map`
+and `/p` are listed in [README-CommandlineParameters.md](README-CommandlineParameters.md).
+
+## Control page
+
+`gk6x ui` (or **GK6X Lighting** in the app menu) opens the control page. It has four tabs, modelled on the official
+software's screens, and works in English and Portuguese with seven themes (Midnight, Neon, Carbon, Aurora, Clean light,
+Material You and Classic). The theme picker is at the top right, or open `http://127.0.0.1:6465/?theme=aurora`.
+
+**Lighting**: realtime effects, per-key painting, colors, speed and brightness. This is the live preview of what the
+keyboard receives.
+
+**Configurations**: remap keys per layer (Layer 1-3, each with its Fn layer). Pick a key, then choose a function from the
+palette (Primary, Number Pad, Media, System/Net, Mouse, Disable, Layers, Lighting, Macros) or build a combination such as
+Ctrl+Shift+A (Win/Mac naming toggle).
+- **Save** writes `~/.config/gk6x/UserData/MODELID.txt`.
+- **Apply** writes the layer to the keyboard.
+- **Import / Export** exchange that file.
+
+The standard layer is protected, as in the official software; you can only set its lighting.
+
+![Configurations tab](docs/config.png)
+
+**LE Files**: the 300+ lighting effects shipped with the official software, searchable.
+- **View** plays one on your keyboard in realtime (a software approximation of the firmware animation).
+- **Add to layer** + **Apply** stores it in the keyboard: up to 32 on the standard layer, one on each other layer.
+- Paint keys on the preview and **Save** them as your own static LE file.
+
+![LE Files tab](docs/le.png)
+
+**Macros**: create macros with categories and search.
+- **Record** captures the keys you press in the page, with timing. You can also add actions by hand (Press / Down / Up
+  + delay).
+- Repeat modes: N times, until the key is released, or until it is pressed again.
+- To assign a macro to a key, go to Configurations -> Macros, then Apply.
+
+![Macros tab](docs/macros.png)
+
+Extra key functions in the palette (all firmware features): next lighting effect / reactive effect, brightness and speed
+up/down, lighting pause, lighting on/off, lock the Windows key, hold-to-switch layer and layer buttons.
+
+Firmware shortcuts that work without any software (from the Epomaker / Skyloong SK61-GK61 manuals):
+
+| Shortcut | Action |
+|---|---|
+| Fn+Backspace | backlight on/off |
+| Fn+P / Fn+[ | brightness - / + |
+| Fn+] | next mode |
+| Fn+Q / W / E / R | driver layer / layer 1 / 2 / 3 |
+
+Files:
+- profile: `~/.config/gk6x/UserData/MODELID.txt` (original GK6X text format; a `.bak` copy is kept on save)
+- your lighting files: `~/.config/gk6x/UserData/lighting/*.le`
+- realtime settings: `~/.config/gk6x/realtime.json`
 
 ## Update
 
+From the folder you cloned:
+
 ```sh
-cd GK6X-Linux && git pull && ./linux/install.sh --no-udev --autostart
-systemctl --user start gk6x
+cd GK6X-Linux
+git pull
+./linux/install.sh --no-udev --autostart    # --no-udev: the rule is already installed
+systemctl --user restart gk6x
 ```
+
 Your settings in `~/.config/gk6x` are kept.
 
 ## Uninstall
 
+From the folder you cloned:
+
 ```sh
-./linux/uninstall.sh            # program, service, launcher, udev rule (keeps your settings)
-./linux/uninstall.sh --purge    # also deletes ~/.config/gk6x and logs
+./linux/uninstall.sh            # removes the program, service, menu shortcut and udev rule (keeps your settings)
+./linux/uninstall.sh --purge    # also deletes ~/.config/gk6x (settings, key mappings) and the logs
 ```
 
-Full documentation, how it works and troubleshooting: [README-LINUX.md](README-LINUX.md).
+The keyboard keeps the key mapping last written to it. To restore the defaults, use the reset key combo from its manual
+or run `gk6x` -> `unmap` before uninstalling. After that you can delete the `GK6X-Linux` folder.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `gk6x list` says `open=NO` | Replug the keyboard after installing; make sure you're logged in on the local desktop session. |
+| Keys type nothing while the service runs | `gk6x stop` (or replug), then try `gk6x daemon --driver-keys none`. |
+| `gk6x probe` shows "NO ANSWER" | Try `gk6x probe --driver-keys none` and send the output with your model name in an issue. |
+| Logs | `~/.local/state/gk6x/KbLog.txt` and `journalctl --user -u gk6x` |
+
+Full technical documentation (how realtime lighting works, the local API, development): [README-LINUX.md](README-LINUX.md).
+
+Developing:
+
+```sh
+cd GK6X && dotnet build -c Release     # output in ../Build
+cd ../Build
+dotnet GK6X.dll selftest                # offline protocol + effect checks
+dotnet GK6X.dll daemon --simulate       # control page without a keyboard
+```
+
+## Credits and license
+
+- **GK6X** by [pixeltris](https://github.com/pixeltris/GK6X): the original key mapping, macro and lighting tool this
+  project is built on, with contributions from Jonavin, Faalagorn, Jhair Paris, Artoghrul Gahramanli and others.
+- [@wgwoods](https://github.com/wgwoods) ([gk64-python](https://github.com/wgwoods/gk64-python)): annotated GK64 firmware
+  disassembly. See also [node-gk6x](https://github.com/konsumer/node-gk6x).
+- Linux port, realtime lighting daemon, control page and installer: [Nergalzin](https://github.com/nergalzin).
+
+The code is under the [MIT License](LICENSE). The data files under `Build/Data/` come from the official software and are
+proprietary to jikedingzhi; they are **not** covered by the MIT license.
 
 ---
 
-# Original README (upstream, archived)
+<details>
+<summary>Original GK6X README (upstream, archived). It describes the old Windows / mono builds, which this project does not use.</summary>
+
+> **Warning:** do not use the udev rule shown below. `SUBSYSTEM=="input", GROUP="input", MODE="0666"` makes every input
+> device on the machine readable and writable by any local user (a keylogger risk). `./linux/install.sh` installs a safe
+> rule that only touches this keyboard.
+
 
 Project archived on 2026-03-05. I've made a release updating the data files to V6.0.0.76 on this date but no GUI build due to issues. This release provides compatibility with keyboards such as GK68 but hasn't been tested thoroughly. If you're having issues try the GK6X-v1.21 release instead. It's recommended to use the official software which is linked below. This project is no longer maintained as I no longer use any GK6X based keyboards.
 
@@ -193,3 +319,5 @@ This is used to update the data files from the official software. This exact pro
 
 - https://github.com/wgwoods/gk64-python - thanks to [@wgwoods](https://github.com/wgwoods) for his work on annotating the dissasembly of the GK64 firmware.
 - https://github.com/konsumer/node-gk6x
+
+</details>
